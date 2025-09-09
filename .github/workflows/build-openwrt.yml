@@ -1,0 +1,137 @@
+name: Build OpenWrt X86_64 with Argon and iStoreOS Elements
+
+on:
+  workflow_dispatch:
+    inputs:
+      version_tag:
+        description: 'Release version tag (e.g., v1.0.0)'
+        required: true
+        default: 'v1.0.0'
+      build_description:
+        description: 'Release description'
+        required: false
+        default: 'OpenWrt X86_64 build with Argon theme and iStoreOS elements'
+
+env:
+  TZ: Asia/Shanghai
+
+jobs:
+  build-openwrt:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - target: x86
+            subtarget: 64
+            profile: generic
+
+    steps:
+    - name: Checkout Lean's LEDE source
+      uses: actions/checkout@v4
+      with:
+        repository: coolsnowwolf/lede
+        ref: master
+        path: lede
+
+    - name: Checkout current repository (for config and scripts)
+      uses: actions/checkout@v4
+      with:
+        path: current-repo
+
+    - name: Copy config and customization scripts
+      run: |
+        cp current-repo/.config lede/
+        cp current-repo/customize.sh lede/
+        chmod +x lede/customize.sh
+
+    - name: Setup Build Environment
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
+        gettext git libncurses5-dev libssl-dev python3-setuptools rsync swig unzip zlib1g-dev \
+        file wget llvm python3-pyelftools libpython3-dev aria2 jq qemu-utils ccache rename \
+        libelf-dev device-tree-compiler libgmp3-dev libmpc-dev libfuse-dev
+
+    - name: Update feeds and install prerequisites
+      working-directory: ./lede
+      run: |
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
+
+    - name: Run Customization Script (Argon Theme & iStoreOS Style)
+      working-directory: ./lede
+      run: ./customize.sh
+
+    - name: Load Custom Config and Run Defconfig
+      working-directory: ./lede
+      run: |
+        # 确保.config文件存在
+        if [ ! -f .config ]; then
+          echo "Error: .config file not found!"
+          exit 1
+        fi
+        make defconfig
+
+    - name: Download packages
+      working-directory: ./lede
+      run: |
+        make download -j$(nproc)
+        find dl -size -1024c -exec rm -f {} \;
+
+    - name: Build Firmware
+      working-directory: ./lede
+      run: make -j$(($(nproc) + 1)) || make -j1 V=s
+
+    - name: Prepare release assets
+      id: prepare-release
+      working-directory: ./lede
+      run: |
+        # 创建发布目录
+        mkdir -p ../release_assets
+        
+        # 复制固件文件
+        cp bin/targets/${{ matrix.target }}/${{ matrix.subtarget }}/*.img.gz ../release_assets/ 2>/dev/null || true
+        cp bin/targets/${{ matrix.target }}/${{ matrix.subtarget }}/*.vmdk ../release_assets/ 2>/dev/null || true
+        cp bin/targets/${{ matrix.target }}/${{ matrix.subtarget }}/*.iso ../release_assets/ 2>/dev/null || true
+        
+        # 复制配置文件和信息文件
+        cp .config ../release_assets/openwrt-config.txt
+        cp bin/targets/${{ matrix.target }}/${{ matrix.subtarget }}/config.buildinfo ../release_assets/build-info.txt
+        
+        # 创建版本信息文件
+        echo "Build Date: $(date)" > ../release_assets/version-info.txt
+        echo "GitHub Run ID: $GITHUB_RUN_ID" >> ../release_assets/version-info.txt
+        echo "Target: ${{ matrix.target }}/${{ matrix.subtarget }}" >> ../release_assets/version-info.txt
+        echo "Version Tag: ${{ github.event.inputs.version_tag }}" >> ../release_assets/version-info.txt
+        
+        # 设置输出变量供后续步骤使用
+        echo "RELEASE_ASSETS_PATH=../release_assets" >> $GITHUB_ENV
+
+    - name: Create Release
+      id: create_release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ github.event.inputs.version_tag }}
+        release_name: OpenWrt X86_64 Build - ${{ github.event.inputs.version_tag }}
+        body: |
+          ${{ github.event.inputs.build_description }}
+          
+          Build Details:
+          - Date: $(date)
+          - Target: ${{ matrix.target }}/${{ matrix.subtarget }}
+          - GitHub Run ID: $GITHUB_RUN_ID
+          
+          This release contains OpenWrt firmware for x86_64 systems with:
+          - Argon theme
+          - iStoreOS-style interface elements
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Upload Release Assets
+      uses: softprops/action-gh-release@v1
+      with:
+        files: ${{ env.RELEASE_ASSETS_PATH }}/*
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
