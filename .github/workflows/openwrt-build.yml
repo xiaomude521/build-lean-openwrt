@@ -1,4 +1,4 @@
-name: Auto Build OpenWrt X86_64
+name: openwrt-build
 
 on:
   workflow_dispatch:
