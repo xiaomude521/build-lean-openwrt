@@ -115,7 +115,7 @@ sed -i 's/OpenWrt/iStoreOS-Lite/g' package/base-files/files/bin/config_generate
 
 # 创建自定义 banner
 cat > package/base-files/files/etc/banner << 'EOF'
-_________
+     _________
     /        /\      _    ___ ___  ___
    /  LE    /  \    | |  | __|   \| __|
   /    DE  /    \   | |__| _|| |) | _|
