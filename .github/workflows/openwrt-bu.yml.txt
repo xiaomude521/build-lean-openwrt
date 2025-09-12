@@ -1,0 +1,172 @@
+﻿name: Auto OpenWrt X86_64
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_description:
+        description: 'Release description (optional)'
+        required: false
+        default: 'Auto-built OpenWrt with Argon theme and iStoreOS elements'
+
+env:
+  TZ: Asia/Shanghai
+  UPLOAD_RELEASE: true
+  KEEP_RELEASES: 3
+
+jobs:
+  build-openwrt:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - target: x86
+            subtarget: 64
+            profile: generic
+
+    steps:
+    # --- 源码准备阶段 ---
+    - name: Checkout Lean's LEDE source
+      uses: actions/checkout@v4
+      with:
+        repository: coolsnowwolf/lede
+        ref: master
+        path: lede
+
+    - name: Checkout current config
+      uses: actions/checkout@v4
+      with:
+        path: config-repo
+
+    # --- 环境配置阶段 ---
+    - name: Setup Build Environment
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
+        gettext git libncurses5-dev libssl-dev python3-setuptools rsync swig unzip zlib1g-dev \
+        file wget llvm python3-pyelftools libpython3-dev aria2 jq qemu-utils ccache rename \
+        libelf-dev device-tree-compiler libgmp3-dev libmpc-dev libfuse-dev dos2unix
+
+    # --- 编译配置阶段 ---
+    - name: Apply custom config
+      run: |
+        # 处理可能的行尾符问题
+        dos2unix config-repo/Lean.config
+        
+        # 复制配置文件
+        cp config-repo/Lean.config lede/.config
+        cp config-repo/customize.sh lede/
+        chmod +x lede/customize.sh
+
+    - name: Verify config file
+      working-directory: ./lede
+      run: |
+        # 检查配置文件是否存在且有效
+        if [ ! -f .config ]; then
+          echo "Error: .config file not found!"
+          exit 1
+        fi
+        
+        # 检查文件是否包含有效的配置
+        if ! grep -q "CONFIG_TARGET_x86_64" .config; then
+          echo "Error: Invalid .config file!"
+          head -n 10 .config
+          exit 1
+        fi
+        
+        echo "Config file appears to be valid"
+
+    - name: Update and install feeds
+      working-directory: ./lede
+      run: |
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
+
+    - name: Run customization
+      working-directory: ./lede
+      env:
+        CUSTOM_IP: ${{ vars.CUSTOM_IP || '192.168.10.1' }}
+      run: ./customize.sh
+
+    - name: Verify config
+      working-directory: ./lede
+      run: |
+        make defconfig
+
+    # --- 编译阶段 ---
+    - name: Download packages
+      working-directory: ./lede
+      run: |
+        make download -j$(nproc)
+        find dl -size -1024c -exec rm -f {} \;
+
+    - name: Build firmware
+      working-directory: ./lede
+      run: make -j$(($(nproc) + 1)) || make -j1 V=s
+
+    # --- 发布准备阶段 ---
+    - name: Prepare release assets
+      id: prepare_assets
+      working-directory: ./lede
+      run: |
+        # 创建固件目录并设置绝对路径
+        FIRMWARE_DIR="$(pwd)/../firmware"
+        mkdir -p "$FIRMWARE_DIR"
+        
+        # 使用find命令确保匹配到文件才复制
+        find bin/targets/${{ matrix.target }}/${{ matrix.subtarget }} \
+          -maxdepth 1 \
+          \( -name "*.img.gz" -o -name "*.vmdk" -o -name "*.iso" -o -name "*.bin" \) \
+          -exec cp {} "$FIRMWARE_DIR/" \;
+        
+        # 复制构建信息文件
+        cp .config "$FIRMWARE_DIR/config.txt"
+        cp bin/targets/${{ matrix.target }}/${{ matrix.subtarget }}/config.buildinfo "$FIRMWARE_DIR/buildinfo.txt"
+        
+        # 验证文件是否存在
+        if [ -z "$(ls -A "$FIRMWARE_DIR")" ]; then
+          echo "Error: No firmware files found in $FIRMWARE_DIR!"
+          exit 1
+        fi
+        
+        echo "FIRMWARE_PATH=$FIRMWARE_DIR" >> $GITHUB_ENV
+        echo "prepare_assets_status=success" >> $GITHUB_ENV
+
+    # --- 自动发布阶段 ---
+    - name: Generate release info
+      if: env.UPLOAD_RELEASE == 'true' && !cancelled() && env.prepare_assets_status == 'success'
+      run: |
+        echo "Release info will be generated based on workflow inputs"
+
+    - name: Create GitHub Release
+      if: env.UPLOAD_RELEASE == 'true' && !cancelled() && env.prepare_assets_status == 'success'
+      id: create_release
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: build-${{ github.run_id }}
+        release_name: OpenWrt Build ${{ github.run_number }}
+        body: ${{ inputs.build_description || 'Auto-built OpenWrt firmware' }}
+        draft: false
+        prerelease: false
+
+    - name: Upload Firmware to Release
+      if: env.UPLOAD_RELEASE == 'true' && !cancelled() && env.prepare_assets_status == 'success'
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: ${{ env.FIRMWARE_PATH }}/*
+        asset_name: openwrt-${{ matrix.target }}-${{ matrix.subtarget }}-firmware
+        asset_content_type: application/octet-stream
+
+    # --- 清理旧版本 ---
+    - name: Clean Old Releases
+      if: env.UPLOAD_RELEASE == 'true' && !cancelled() && env.prepare_assets_status == 'success'
+      run: |
+        # 保留最新的 KEEP_RELEASES 个版本
+        releases=$(gh api repos/${{ github.repository }}/releases --jq '.[].id' | head -n -${{ env.KEEP_RELEASES }})
+        for release in $releases; do
+          gh api repos/${{ github.repository }}/releases/$release -X DELETE
+        done
