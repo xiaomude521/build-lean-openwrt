@@ -154,3 +154,18 @@ if [ -d "package/lean/luci-theme-argon" ]; then
 else
     echo "Warning: luci-theme-argon not found, cannot set as default theme"
 fi
+
+# ========== 修改 Argon 主题左上角标题（最终优化版） ==========
+echo "开始修改 Argon 主题左上角名称..."
+echo "Default theme set to Argon"
+else
+    echo "Warning: luci-theme-argon not found, cannot set as default theme"
+fi
+
+# ========== 新增：修改系统默认主机名为 OpenWrt ==========
+SYS_CONF="package/base-files/files/etc/config/system"
+if [ -f "$SYS_CONF" ]; then
+    sed -i 's/option hostname "lede"/option hostname "OpenWrt"/g' $SYS_CONF
+    echo "系统主机名已改为 OpenWrt"
+fi
+# ===============================================================
