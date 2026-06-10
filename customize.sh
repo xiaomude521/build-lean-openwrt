@@ -155,17 +155,17 @@ else
     echo "Warning: luci-theme-argon not found, cannot set as default theme"
 fi
 
-# ========== 修改 Argon 主题左上角标题（最终优化版） ==========
-echo "开始修改 Argon 主题左上角名称..."
-echo "Default theme set to Argon"
-else
-    echo "Warning: luci-theme-argon not found, cannot set as default theme"
-fi
-
-# ========== 新增：修改系统默认主机名为 OpenWrt ==========
+# ========== 同时修改：系统主机名 + Argon 左上角标题 ==========
+# 1. 修改系统默认主机名为 OpenWrt
 SYS_CONF="package/base-files/files/etc/config/system"
 if [ -f "$SYS_CONF" ]; then
-    sed -i 's/option hostname "lede"/option hostname "OpenWrt"/g' $SYS_CONF
-    echo "系统主机名已改为 OpenWrt"
+    sed -i 's/option hostname "lede"/option hostname "OpenWrt"/g' "$SYS_CONF"
+    echo "系统主机名已修改为 OpenWrt"
 fi
-# ===============================================================
+
+# 2. 修改 Argon 左上角固定显示为 OpenWrt
+ARGON_HEADER="package/lean/luci-theme-argon/luasrc/view/themes/argon/header.htm"
+if [ -f "$ARGON_HEADER" ]; then
+    sed -i 's|<div class="brand"><%= boardinfo.hostname %> <%= boardinfo.model %></div>|<div class="brand">OpenWrt</div>|g' "$ARGON_HEADER"
+    echo "Argon 左上角标题已固定为 OpenWrt"
+fi
