@@ -1,4 +1,4 @@
-name: Auto xiaomude521 OpenWrt X86_64
+name: OpenWrt X86_64
 on:
   workflow_dispatch:
     inputs:
