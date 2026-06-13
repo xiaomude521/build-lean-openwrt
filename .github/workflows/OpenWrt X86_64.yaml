@@ -32,15 +32,15 @@ jobs:
       with:
         path: config-repo
 
-    # --- 磁盘清理 + 扩容交换分区 ---
-    - name: Clean system disk & add swap
+    # --- 系统磁盘清理（移除swap相关报错代码）---
+    - name: Clean system disk space
       run: |
         sudo apt-get clean
-        sudo rm -rf /var/lib/apt/lists/* /usr/share/dotnet /opt/ghc /usr/local/lib/android /usr/share/swift
-        sudo fallocate -l 10G /swapfile
-        sudo chmod 600 /swapfile
-        sudo mkswap /swapfile
-        sudo swapon /swapfile
+        sudo rm -rf /var/lib/apt/lists/*
+        sudo rm -rf /usr/share/dotnet
+        sudo rm -rf /opt/ghc
+        sudo rm -rf /usr/local/lib/android
+        sudo rm -rf /usr/share/swift
         df -h
 
     # --- 环境配置阶段 ---
@@ -105,7 +105,7 @@ jobs:
         find dl -name "*.tmp" -delete
         df -h
 
-    # --- 正式编译（优化磁盘判断、稳定编译）---
+    # --- 正式编译 ---
     - name: Build firmware with disk management
       working-directory: ./lede
       run: |
@@ -115,7 +115,6 @@ jobs:
         make -j2 toolchain/install
 
         while true; do
-          # 改用MB单位判断剩余空间
           DISK_SPACE=$(df -BM . | awk 'NR==2 {gsub(/M/,""); print $4}')
           if [ "$DISK_SPACE" -lt 1024 ]; then
             echo "Warning: Low disk space (${DISK_SPACE}MB), cleaning temp files..."
@@ -140,7 +139,7 @@ jobs:
           fi
         done
 
-    # --- 收集固件（去掉maxdepth，兼容images子目录）---
+    # --- 收集固件 ---
     - name: Prepare release assets
       id: prepare_assets
       working-directory: ./lede
@@ -162,11 +161,10 @@ jobs:
 
         echo "Found files:"
         ls -la "$FIRMWARE_DIR/"
-        echo "FIRMWARE_PATH=$FIRMWARE_DIR" >> $GITH_ENV
         echo "FIRMWARE_PATH=$FIRMWARE_DIR" >> $GITHUB_ENV
         echo "prepare_assets_status=success" >> $GITHUB_ENV
 
-    # ========= 重点修复：先安装 gh 再上传 =========
+    # --- 先安装 GitHub CLI（修复上传顺序）---
     - name: Install GitHub CLI
       if: env.UPLOAD_RELEASE == 'true' && !cancelled() && env.prepare_assets_status == 'success'
       run: |
@@ -211,7 +209,6 @@ jobs:
         total_releases=$(echo "$all_releases" | wc -l)
         if [ $total_releases -gt $keep_count ]; then
           delete_count=$((total_releases - keep_count))
-          echo "Keeping $keep_count releases, deleting $delete_count oldest releases"
           releases_to_delete=$(echo "$all_releases" | tail -n $delete_count | awk '{print $1}')
           for release_tag in $releases_to_delete; do
             gh release delete "$release_tag" --repo ${{ github.repository }} --yes
