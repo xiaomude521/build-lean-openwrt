@@ -33,18 +33,12 @@ jobs:
         with:
           path: config-repo
 
-      - name: 系统深度磁盘清理 + 安全挂载10G交换分区
+      - name: 系统深度磁盘清理
         run: |
           sudo apt-get clean
           sudo rm -rf /var/lib/apt/lists/*
           sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /usr/share/swift
           sudo rm -rf /usr/share/doc /usr/share/man /usr/share/locale
-          # 安全创建swap，规避Text file busy报错
-          sudo dd if=/dev/zero of=/swapfile bs=1G count=10
-          sudo chmod 600 /swapfile
-          sudo mkswap /swapfile
-          sudo swapon /swapfile
-          swapon --show
           df -h
 
       - name: 安装全套编译依赖
@@ -102,7 +96,7 @@ jobs:
           find dl -size -1024c -delete
           find dl -name "*.tmp" -delete
 
-      - name: 分段编译固件（每段自动清理中间文件，防磁盘爆满）
+      - name: 分段编译固件（边编译边清中间文件，防磁盘溢出）
         working-directory: ./lede
         run: |
           set -e
@@ -132,19 +126,19 @@ jobs:
           FIRMWARE_DIR="$(pwd)/../firmware"
           mkdir -p "$FIRMWARE_DIR"
 
-          # 锁定images镜像目录递归复制所有固件格式
+          # 锁定images目录复制所有固件格式
           find bin/targets/${{ matrix.target }}/${{ matrix.subtarget }}/images -type f \
             \( -name "*.img.gz" -o -name "*.img" -o -name "*.vmdk" -o -name "*.iso" -o -name "*.bin" -o -name "*.xz" \) \
             -exec cp -v {} "$FIRMWARE_DIR/" \;
 
-          # 复制配置文本
+          # 复制配置文件
           cp -v .config "$FIRMWARE_DIR/config.txt"
           cp -v bin/targets/${{ matrix.target }}/${{ matrix.subtarget }}/config.buildinfo "$FIRMWARE_DIR/buildinfo.txt"
 
           echo -e "\n=== 已复制到上传目录所有文件 ==="
           ls -la "$FIRMWARE_DIR/"
 
-          # 校验：无固件直接终止流程，不生成空Release
+          # 无固件直接终止流程
           IMG_NUM=$(ls "$FIRMWARE_DIR/" | grep -E "\.(img.gz|img|iso|bin|vmdk)$" | wc -l)
           if [ "$IMG_NUM" -eq 0 ]; then
             echo "ERROR：未检索到固件镜像，终止Release发布"
@@ -154,13 +148,13 @@ jobs:
           echo "FIRMWARE_PATH=$FIRMWARE_DIR" >> $GITHUB_ENV
           echo "prepare_assets_status=success" >> $GITHUB_ENV
 
-      - name: 安装GitHub CLI gh上传工具（前置执行）
+      - name: 安装GitHub CLI gh上传工具
         if: env.UPLOAD_RELEASE == 'true' && !cancelled() && env.prepare_assets_status == 'success'
         run: |
           type -p curl >/dev/null || sudo apt update && sudo apt install curl -y
           curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
           sudo chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg
-          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/githubcli-archive-keyring.gpg
           sudo apt update && sudo apt install gh -y
 
       - name: 创建GitHub Release版本
@@ -185,7 +179,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: 自动清理旧Release（仅保留设定数量）
+      - name: 自动清理旧Release
         if: env.UPLOAD_RELEASE == 'true' && !cancelled() && env.prepare_assets_status == 'success'
         run: |
           keep_count=${{ env.KEEP_RELEASES }}
